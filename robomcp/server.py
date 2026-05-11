@@ -1,18 +1,20 @@
 """robomcp — Roborock MCP server.
 
 Thin wrapper around python-roborock (https://github.com/Python-roborock/python-roborock)
-that exposes login, device discovery, status, control and a handful of
-diagnostic traits as MCP tools.
+that exposes device discovery, status, control and a handful of diagnostic
+traits as MCP tools.
 
-State (device identifier, user data, cached home data) is persisted to a
-JSON file under ~/.config/robomcp/state.json so the two-step e-mail
-verification flow survives between separate tool invocations.
+Authentication is performed once via the CLI (`robomcp auth`); the resulting
+e-mail address, user_data and cached home_data are persisted to
+~/.config/robomcp/state.json. The MCP server (`robomcp`) then reads the
+state file at every tool call.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -64,9 +66,9 @@ def _save_state(state: dict[str, Any]) -> None:
 
 
 def _email() -> str:
-    email = os.environ.get("ROBOROCK_EMAIL", "").strip()
+    email = (_load_state().get("email") or "").strip()
     if not email:
-        raise RuntimeError("ROBOROCK_EMAIL env var is required")
+        raise RuntimeError("Not authenticated. Run `robomcp auth` first.")
     return email
 
 
@@ -76,7 +78,7 @@ async def _open_manager():
     state = _load_state()
     ud_raw = state.get("user_data")
     if not ud_raw:
-        raise RuntimeError("Not logged in. Call request_code then login first.")
+        raise RuntimeError("Not authenticated. Run `robomcp auth` first.")
     user_data = UserData.from_dict(ud_raw)
     manager = await create_device_manager(
         UserParams(username=_email(), user_data=user_data)
@@ -119,67 +121,12 @@ mcp = FastMCP("robomcp")
 
 
 @mcp.tool()
-async def request_code() -> str:
-    """Send a 6-digit verification code to the Roborock account e-mail.
-
-    First step of the two-step login. Reads the e-mail address from
-    `ROBOROCK_EMAIL` and persists the per-session device identifier so
-    `login` can reproduce the same identity.
-    """
-    email = _email()
-    api = RoborockApiClient(email)
-    # Persist the per-instance device identifier so login() can reconstruct
-    # the same header_clientid (MD5(email + identifier)) the server binds
-    # the pending code to.
-    state = _load_state()
-    state["device_identifier"] = api._device_identifier
-    _save_state(state)
-    await api.request_code()
-    return f"Code sent to {email}. Now call login(code)."
-
-
-@mcp.tool()
-async def login(
-    code: Annotated[
-        str,
-        Field(
-            description="6-digit code received by e-mail. Pass as STRING so "
-            "leading zeros are preserved (e.g. '058537').",
-            min_length=4,
-            max_length=8,
-        ),
-    ],
-) -> str:
-    """Confirm the e-mail code and cache user_data + device list.
-
-    Second step of the two-step login. After this call, all other tools
-    work without further authentication.
-    """
-    email = _email()
-    state = _load_state()
-    identifier = state.get("device_identifier")
-    if not identifier:
-        raise RuntimeError("No pending code. Call request_code first.")
-    api = RoborockApiClient(email)
-    api._device_identifier = identifier
-    user_data = await api.code_login(str(code))
-    home = await api.get_home_data_v2(user_data)
-    state["user_data"] = user_data.as_dict()
-    state["home_data"] = home.as_dict()
-    _save_state(state)
-    return (
-        f"Logged in. {len(home.devices)} device(s) cached: "
-        + ", ".join(f"{d.name} ({d.duid})" for d in home.devices)
-    )
-
-
-@mcp.tool()
 async def list_devices() -> list[dict[str, Any]]:
     """List devices from the cached home data (no MQTT roundtrip)."""
     state = _load_state()
     home = state.get("home_data")
     if not home:
-        raise RuntimeError("Not logged in. Call request_code then login first.")
+        raise RuntimeError("Not authenticated. Run `robomcp auth` first.")
     products = {p["id"]: p for p in home.get("products", [])}
     out: list[dict[str, Any]] = []
     for d in home.get("devices", []):
@@ -382,7 +329,65 @@ async def set_water_mode(
     )
 
 
+# ---------------------------------------------------------------------------
+# CLI: interactive authentication
+# ---------------------------------------------------------------------------
+
+
+def _prompt(label: str) -> str:
+    """Read a line from stdin, stripped, non-empty."""
+    value = input(f"{label}: ").strip()
+    if not value:
+        print(f"{label} is required.", file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
+async def _auth_flow() -> None:
+    """Two-step e-mail verification. Persists email + user_data + home_data."""
+    email = _prompt("Roborock e-mail")
+    api = RoborockApiClient(email)
+    print(f"Sending verification code to {email} ...")
+    await api.request_code()
+    print("Code sent. Check your inbox.")
+
+    # The same RoborockApiClient instance is used for both request_code and
+    # code_login so the per-instance _device_identifier (which is part of the
+    # header_clientid the server binds the pending code to) stays consistent.
+    code = _prompt("Verification code")
+    user_data = await api.code_login(code)
+    home = await api.get_home_data_v2(user_data)
+
+    _save_state(
+        {
+            "email": email,
+            "user_data": user_data.as_dict(),
+            "home_data": home.as_dict(),
+        }
+    )
+    print(f"Authenticated. {len(home.devices)} device(s) cached:")
+    for d in home.devices:
+        print(f"  - {d.name} ({d.duid})")
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "auth":
+        try:
+            asyncio.run(_auth_flow())
+        except KeyboardInterrupt:
+            print("\nAborted.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as e:
+            print(f"Authentication failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help"):
+        print(
+            "Usage:\n"
+            "  robomcp          start the MCP server (stdio)\n"
+            "  robomcp auth     interactive Roborock login (one-time)\n"
+        )
+        return
     mcp.run()
 
 

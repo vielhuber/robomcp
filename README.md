@@ -10,30 +10,35 @@ cd robomcp
 uv tool install .
 ```
 
-## Configure
+## Authenticate (one-time, CLI)
+
+Roborock requires a two-step e-mail verification. Run it once from the shell — credentials are then stored in `~/.config/robomcp/state.json` (chmod 600) and reused on every MCP call.
+
+```
+$ robomcp auth
+Roborock e-mail: you@example.com
+Sending verification code to you@example.com ...
+Code sent. Check your inbox.
+Verification code: 058537
+Authenticated. 1 device(s) cached:
+  - Q5 Pro (5lk1K4mF6gBPO1TBdop3NB)
+```
+
+Re-run `robomcp auth` any time you want to switch accounts or refresh the cached device list. The MCP server itself never asks for credentials.
+
+## Configure (MCP client)
 
 ```json
 {
     "robomcp": {
-        "command": "robomcp",
-        "env": {
-            "ROBOROCK_EMAIL": "you@example.com"
-        }
+        "command": "robomcp"
     }
 }
 ```
 
+No env vars needed — the server reads the cached state file.
+
 ## Tools
-
-### Authentication (one-time)
-
-#### `request_code()`
-
-Sends a 6-digit verification code to `ROBOROCK_EMAIL`. Persists the per-session device identifier so `login` can reproduce the same identity.
-
-#### `login(code: str)`
-
-Confirms the code received by e-mail. **Pass the code as a string** (`"058537"`) so leading zeros are preserved. Caches `user_data` and the device list — all other tools then work without re-auth.
 
 ### Discovery
 
