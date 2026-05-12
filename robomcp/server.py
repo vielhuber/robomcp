@@ -343,8 +343,15 @@ def _prompt(label: str) -> str:
     return value
 
 
-async def _auth_flow() -> None:
+async def _auth_flow(force: bool = False) -> None:
     """Two-step e-mail verification. Persists email + user_data + home_data."""
+    state = _load_state()
+    if not force and state.get("user_data") and state.get("email"):
+        devices = (state.get("home_data") or {}).get("devices") or []
+        print(f"Already authenticated as {state['email']} ({len(devices)} device(s) cached).")
+        print(f"State file: {_state_file()}")
+        print("Pass --force to re-authenticate.")
+        return
     email = _prompt("Roborock e-mail")
     api = RoborockApiClient(email)
     print(f"Sending verification code to {email} ...")
@@ -372,8 +379,9 @@ async def _auth_flow() -> None:
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "auth":
+        force = "--force" in sys.argv[2:] or "-f" in sys.argv[2:]
         try:
-            asyncio.run(_auth_flow())
+            asyncio.run(_auth_flow(force=force))
         except KeyboardInterrupt:
             print("\nAborted.", file=sys.stderr)
             sys.exit(130)
@@ -384,8 +392,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help"):
         print(
             "Usage:\n"
-            "  robomcp          start the MCP server (stdio)\n"
-            "  robomcp auth     interactive Roborock login (one-time)\n"
+            "  robomcp                  start the MCP server (stdio)\n"
+            "  robomcp auth             show cached login or run interactive login if none\n"
+            "  robomcp auth --force     force re-authentication\n"
         )
         return
     mcp.run()
