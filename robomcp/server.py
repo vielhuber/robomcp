@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,6 +44,15 @@ WATER_MODE_CODES: dict[str, int] = {
 
 def _data_dir() -> Path:
     base = Path.home() / ".config" / "robomcp"
+    # If `base` is a symlink (set up by the deployment script), make sure the
+    # symlink target itself exists — otherwise mkdir(exist_ok=True) on the
+    # broken link raises FileExistsError.
+    if base.is_symlink():
+        target = Path(os.readlink(str(base)))
+        if not target.is_absolute():
+            target = base.parent / target
+        target.mkdir(parents=True, exist_ok=True)
+        return base
     base.mkdir(parents=True, exist_ok=True)
     return base
 
