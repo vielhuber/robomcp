@@ -30,15 +30,21 @@ from roborock.devices.device_manager import (
 from roborock.roborock_typing import RoborockCommand
 from roborock.web_api import RoborockApiClient
 
-
 # Pretty fan-speed and water-mode names that the device accepts.
 FanSpeed = Literal["quiet", "balanced", "turbo", "max", "gentle"]
 WaterMode = Literal["off", "low", "medium", "high"]
 FAN_SPEED_CODES: dict[str, int] = {
-    "quiet": 101, "balanced": 102, "turbo": 103, "max": 104, "gentle": 105,
+    "quiet": 101,
+    "balanced": 102,
+    "turbo": 103,
+    "max": 104,
+    "gentle": 105,
 }
 WATER_MODE_CODES: dict[str, int] = {
-    "off": 200, "low": 201, "medium": 202, "high": 203,
+    "off": 200,
+    "low": 201,
+    "medium": 202,
+    "high": 203,
 }
 
 
@@ -121,9 +127,7 @@ def _v1(dev) -> Any:
 # Reused argument annotations.
 DuidArg = Annotated[
     str | None,
-    Field(
-        description="Device UID. Omit to act on the first device on the account."
-    ),
+    Field(description="Device UID. Omit to act on the first device on the account."),
 ]
 
 
@@ -358,7 +362,9 @@ async def _auth_flow(force: bool = False) -> None:
     state = _load_state()
     if not force and state.get("user_data") and state.get("email"):
         devices = (state.get("home_data") or {}).get("devices") or []
-        print(f"Already authenticated as {state['email']} ({len(devices)} device(s) cached).")
+        print(
+            f"Already authenticated as {state['email']} ({len(devices)} device(s) cached)."
+        )
         print(f"State file: {_state_file()}")
         print("Pass --force to re-authenticate.")
         return
